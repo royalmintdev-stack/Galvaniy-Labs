@@ -45,7 +45,7 @@ export const Generator: React.FC<GeneratorProps> = ({ user, onReportGenerated, t
     setLoading(true);
     try {
       const content = await generateLabReport(trimmedCode);
-      
+
       // Validate JSON
       try {
         JSON.parse(content);
@@ -64,8 +64,9 @@ export const Generator: React.FC<GeneratorProps> = ({ user, onReportGenerated, t
       storageService.incrementDailyLimit(user.email);
       onReportGenerated(newReport);
       setCode('');
-    } catch (err: any) {
-      setError(err.message || 'Generation failed.');
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'Generation failed.';
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -73,7 +74,7 @@ export const Generator: React.FC<GeneratorProps> = ({ user, onReportGenerated, t
 
   return (
     <div className="w-full max-w-2xl mx-auto mt-8">
-      <motion.div 
+      <motion.div
         initial={{ y: 20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         className="glass-panel p-6 rounded-2xl"
@@ -97,7 +98,7 @@ export const Generator: React.FC<GeneratorProps> = ({ user, onReportGenerated, t
               className="w-full bg-slate-900/50 border border-slate-700 rounded-xl p-4 text-lg text-white focus:outline-none focus:border-blue-500 transition-colors uppercase placeholder:normal-case"
             />
           </div>
-          
+
           {error && (
             <div className="flex items-center gap-2 text-red-400 bg-red-900/20 p-3 rounded-lg text-sm">
               <AlertCircle size={16} /> {error}
