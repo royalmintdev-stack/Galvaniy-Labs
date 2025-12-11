@@ -14,8 +14,121 @@ const PORT = 3001;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+import cookieParser from 'cookie-parser';
+import nodemailer from 'nodemailer';
+import crypto from 'crypto';
+
+// ... imports ...
+
 app.use(cors());
 app.use(express.json());
+app.use(cookieParser());
+
+// OTP Store (In-memory for P1, move to Redis for P2)
+const otpStore = new Map();
+const sessionStore = new Map(); // Simple session store [token, user]
+
+// Email Transporter
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
+
+// Auth Routes
+
+// 1. Send OTP
+app.post('/api/auth/send-otp', async (req, res) => {
+  const { email } = req.body;
+  if (!email || !email.includes('@')) {
+    return res.status(400).json({ error: 'Invalid email' });
+  }
+
+  // Generate 6-digit OTP
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  const expires = Date.now() + 5 * 60 * 1000; // 5 minutes
+
+  otpStore.set(email, { otp, expires });
+  console.log(`[Server] OTP generated for ${email}`); // Log existence, not value (in prod) 
+
+  try {
+    if (process.env.EMAIL_USER) {
+      await transporter.sendMail({
+        from: process.env.EMAIL_USER,
+        to: email,
+        subject: 'Your Physics Lab OTP',
+        text: `Your verification code is: ${otp}`,
+        html: `<p>Your verification code is: <b>${otp}</b></p><p>Valid for 5 minutes.</p>`,
+      });
+      res.json({ message: 'OTP sent' });
+    } else {
+      console.warn('EMAIL_USER not set. Printing OTP to server log for DEV/DEMO purposes ONLY.');
+      console.log(`[DEV ONLY] OTP for ${email}: ${otp}`);
+      res.json({ message: 'OTP generated (Dev Mode: Check Server Logs)' });
+    }
+  } catch (err) {
+    console.error('Email error:', err);
+    res.status(500).json({ error: 'Failed to send email' });
+  }
+});
+
+// 2. Verify OTP & Login
+app.post('/api/auth/verify-otp', (req, res) => {
+  const { email, otp } = req.body;
+  const stored = otpStore.get(email);
+
+  if (!stored) return res.status(400).json({ error: 'No OTP requested' });
+  if (Date.now() > stored.expires) {
+    otpStore.delete(email);
+    return res.status(400).json({ error: 'OTP expired' });
+  }
+  if (stored.otp !== otp) {
+    return res.status(400).json({ error: 'Invalid OTP' });
+  }
+
+  // Success
+  otpStore.delete(email);
+
+  // Create Session
+  const token = crypto.randomUUID();
+  // Role Logic: simple string check as per existing app (P1 migration)
+  // Real RBAC comes in P2.
+  const role = email.includes('admin') ? 'admin' : 'student';
+  const user = { email, role, registeredAt: new Date().toISOString() };
+
+  sessionStore.set(token, user);
+
+  // Set Cookie
+  res.cookie('token', token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production', // true in Render
+    sameSite: 'strict',
+    maxAge: 24 * 60 * 60 * 1000 // 1 day
+  });
+
+  res.json({ user });
+});
+
+// 3. Get Current User (Session Check)
+app.get('/api/auth/me', (req, res) => {
+  const token = req.cookies.token;
+  if (!token || !sessionStore.has(token)) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+  const user = sessionStore.get(token);
+  res.json({ user });
+});
+
+// 4. Logout
+app.post('/api/auth/logout', (req, res) => {
+  const token = req.cookies.token;
+  if (token) sessionStore.delete(token);
+  res.clearCookie('token');
+  res.json({ message: 'Logged out' });
+});
+
 
 // Serve static files from the React app
 app.use(express.static(path.join(__dirname, '../dist')));

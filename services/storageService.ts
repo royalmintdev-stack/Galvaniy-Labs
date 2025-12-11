@@ -71,13 +71,13 @@ export const storageService = {
       db.reports[email] = [];
     }
     db.reports[email].unshift(report); // Add to top
-    
+
     // Update user stats
     const user = db.users.find((u: User) => u.email === email);
     if (user) {
       user.reportsGenerated += 1;
     }
-    
+
     saveDb(db);
   },
 
@@ -108,7 +108,7 @@ export const storageService = {
   },
 
   getDailyCount: (email: string): number => {
-     const today = new Date().toDateString();
+    const today = new Date().toDateString();
     const key = `limit_${email}_${today}`;
     return parseInt(localStorage.getItem(key) || '0');
   },
@@ -137,16 +137,18 @@ export const storageService = {
   },
 
   // --- Session Management ---
+  // --- Session Management (Deprecated - Moved to Server HttpOnly Cookies) ---
   setSession: (user: User) => {
-    localStorage.setItem(SESSION_KEY, JSON.stringify(user));
+    // localStorage.setItem(SESSION_KEY, JSON.stringify(user));
   },
 
   getSession: (): User | null => {
-    const data = localStorage.getItem(SESSION_KEY);
-    return data ? JSON.parse(data) : null;
+    // const data = localStorage.getItem(SESSION_KEY);
+    // return data ? JSON.parse(data) : null;
+    return null;
   },
 
   clearSession: () => {
-    localStorage.removeItem(SESSION_KEY);
+    // localStorage.removeItem(SESSION_KEY);
   }
 };

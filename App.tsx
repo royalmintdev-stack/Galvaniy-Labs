@@ -18,12 +18,20 @@ const App: React.FC = () => {
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
 
   useEffect(() => {
-    // Check session
-    const session = storageService.getSession();
-    if (session) {
-      setUser(session);
-      loadReports(session.email);
-    }
+    // Check session via server cookie
+    const checkSession = async () => {
+      try {
+        const res = await fetch('/api/auth/me');
+        if (res.ok) {
+          const data = await res.json();
+          setUser(data.user);
+          loadReports(data.user.email);
+        }
+      } catch (e) {
+        // No valid session
+      }
+    };
+    checkSession();
   }, []);
 
   const loadReports = (email: string) => {
@@ -36,8 +44,13 @@ const App: React.FC = () => {
     loadReports(u.email);
   };
 
-  const handleLogout = () => {
-    storageService.clearSession();
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch (e) {
+      console.error('Logout failed', e);
+    }
+    storageService.clearSession(); // Optional cleanup
     setUser(null);
     setReports([]);
   };
@@ -70,7 +83,7 @@ const App: React.FC = () => {
                 <p className="font-semibold text-white">{user.email}</p>
               </div>
             </div>
-            
+
             <div className="flex gap-2">
               {user.role === 'admin' && (
                 <button
@@ -115,14 +128,14 @@ const App: React.FC = () => {
 
             {/* Sidebar / History */}
             <div className="md:col-span-1">
-               <History reports={reports} onSelect={setSelectedReport} />
+              <History reports={reports} onSelect={setSelectedReport} />
             </div>
           </div>
-          
+
           {/* Modal for viewing report */}
-          <ReportView 
-            report={selectedReport} 
-            onClose={() => setSelectedReport(null)} 
+          <ReportView
+            report={selectedReport}
+            onClose={() => setSelectedReport(null)}
           />
         </div>
       )}
