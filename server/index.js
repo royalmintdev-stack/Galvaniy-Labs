@@ -34,10 +34,15 @@ const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
   port: 587,
   secure: false, // upgrade later with STARTTLS
+  logger: true, // Log to console
+  debug: true,  // Include debug info
   auth: {
     user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
+    pass: process.env.EMAIL_PASS?.replace(/\s+/g, ''), // Remove spaces if present
   },
+  tls: {
+    rejectUnauthorized: false // Helps if cert chain issues, though risky, good for debugging
+  }
 });
 
 // Auth Routes
