@@ -17,6 +17,7 @@ const __dirname = path.dirname(__filename);
 import cookieParser from 'cookie-parser';
 import { Resend } from 'resend';
 import crypto from 'crypto';
+import { WHITELIST } from './whitelist.js';
 
 // ... imports ...
 
