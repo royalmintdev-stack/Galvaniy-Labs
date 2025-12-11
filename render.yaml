@@ -10,5 +10,6 @@ services:
       - key: EMAIL_USER
         value: galvanytech@gmail.com
       - key: EMAIL_PASS
+        value: nxfg jxhc yfsk kdsz
         sync: false
     plan: free
