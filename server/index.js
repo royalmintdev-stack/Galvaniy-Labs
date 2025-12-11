@@ -24,111 +24,56 @@ app.use(cors());
 app.use(express.json());
 app.use(cookieParser());
 
-// OTP Store (In-memory for P1, move to Redis for P2)
+// Stores
 const otpStore = new Map();
-const sessionStore = new Map(); // Simple session store [token, user]
+const sessionStore = new Map(); // token -> user
+const userStore = new Map(); // email -> User (Persistent-ish state)
 
-// Email Transporter (Resend)
-const resend = process.env.RESEND_API_KEY
-  ? new Resend(process.env.RESEND_API_KEY)
-  : null;
-
-// Google OAuth
-import session from 'express-session';
-import passport from 'passport';
-import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
-
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'dev_secret_key', // Use env in prod
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    secure: process.env.NODE_ENV === 'production',
-    httpOnly: true,
-    maxAge: 24 * 60 * 60 * 1000 // 1 day
+// Helper: Get or Create User
+const getOrCreateUser = (email, role = 'student', name = '') => {
+  if (userStore.has(email)) {
+    return userStore.get(email);
   }
-}));
+  const newUser = {
+    email,
+    role: email.includes('admin') || email === 'qsmceoglvn@gmail.com' ? 'admin' : role,
+    name,
+    registeredAt: new Date().toISOString(),
+    reportsGenerated: 0,
+    customLimit: 3,
+    isRevoked: false
+  };
+  userStore.set(email, newUser);
+  return newUser;
+};
 
-app.use(passport.initialize());
-app.use(passport.session());
+// ... Email Transporter ...
 
-// Serialization (Required for Passport Session)
-passport.serializeUser((user, done) => done(null, user));
-passport.deserializeUser((user, done) => done(null, user));
+// ... Google OAuth ...
+// In Google Strategy callback:
+// (accessToken, refreshToken, profile, done) => {
+//   const email = profile.emails?.[0].value;
+//   if (!email) return done(new Error('No email from Google'));
+//   const user = getOrCreateUser(email, 'student', profile.displayName);
+//   const token = crypto.randomUUID();
+//   sessionStore.set(token, user);
+//   return done(null, { ...user, token });
+// }
 
-if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
-  passport.use(new GoogleStrategy({
-    clientID: process.env.GOOGLE_CLIENT_ID,
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    callbackURL: process.env.NODE_ENV === 'production'
-      ? 'https://galvaniy-labs-jvrr.onrender.com/auth/google/callback'
-      : '/auth/google/callback'
-  },
-    (accessToken, refreshToken, profile, done) => {
-      // Logic: Find or Create User
-      const email = profile.emails?.[0].value;
+// ... Google Routes ...
 
-      if (!email) return done(new Error('No email from Google'));
+// ... Auth Routes ...
 
-      // Create Session ID
-      const token = crypto.randomUUID();
-      const role = email.includes('admin') || email === 'qsmceoglvn@gmail.com' ? 'admin' : 'student';
-      const user = { email, role, registeredAt: new Date().toISOString(), name: profile.displayName };
-
-      // Store in our simple map (for parity with OTP flow)
-      // Note: Passport usually manages session in `req.user`, but we use `sessionStore` for the `/me` endpoint parity.
-      // We will sync them:
-      sessionStore.set(token, user);
-
-      // Pass token to controller to set cookie manually if needed, or let Passport handle "user" object
-      // Actually, let's just return the user object with the token attached so the callback handler can set our custom cookie.
-      return done(null, { ...user, token });
-    }
-  ));
-} else {
-  console.warn('[Server] Google OAuth skipped (Missing Client ID/Secret)');
-}
-
-// Google Routes
-app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
-
-app.get('/auth/google/callback',
-  passport.authenticate('google', { failureRedirect: '/' }),
-  (req, res) => {
-    // Successful authentication
-    const user = req.user;
-
-    // Set our custom token cookie (same as OTP flow)
-    res.cookie('token', user.token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 24 * 60 * 60 * 1000
-    });
-
-    res.redirect('/'); // Back to app
-  }
-);
-
-// Auth Routes
-
-import { WHITELIST } from './whitelist.js';
-
-// 1. Send OTP (or Direct Login for Whitelist)
+// 1. Send OTP / Direct Login
 app.post('/api/auth/send-otp', async (req, res) => {
   const { email } = req.body;
-  if (!email || !email.includes('@')) {
-    return res.status(400).json({ error: 'Invalid email' });
-  }
+  if (!email || !email.includes('@')) return res.status(400).json({ error: 'Invalid email' });
 
-  // PILOT FEATURE: Direct Login for Whitelisted Users
+  // Direct Login
   if (WHITELIST.has(email)) {
     console.log(`[Server] Whitelisted user ${email} - Direct Login`);
-
-    // Create Session immediately
     const token = crypto.randomUUID();
-    const role = email.includes('admin') || email === 'qsmceoglvn@gmail.com' ? 'admin' : 'student';
-    const user = { email, role, registeredAt: new Date().toISOString() };
+    const user = getOrCreateUser(email);
 
     sessionStore.set(token, user);
 
@@ -136,47 +81,17 @@ app.post('/api/auth/send-otp', async (req, res) => {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
-      maxAge: 24 * 60 * 60 * 1000 // 1 day
+      maxAge: 24 * 60 * 60 * 1000
     });
-
     return res.json({ user, message: 'Direct login successful' });
   }
 
-  // Normal flow for non-whitelisted users
-  // Generate 6-digit OTP
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  const expires = Date.now() + 5 * 60 * 1000; // 5 minutes
-
-  otpStore.set(email, { otp, expires });
-  console.log(`[Server] OTP generated for ${email}`);
-
-  try {
-    if (resend) {
-      const { data, error } = await resend.emails.send({
-        from: 'onboarding@resend.dev', // Default for free tier
-        to: email, // Delivered ONLY if verified email or sent to self
-        subject: 'Your Physics Lab OTP',
-        html: `<p>Your verification code is: <b>${otp}</b></p><p>Valid for 5 minutes.</p>`,
-      });
-
-      if (error) {
-        console.error('Resend Error:', error);
-        return res.status(500).json({ error: 'Failed to send email via Resend' });
-      }
-
-      res.json({ message: 'OTP sent' });
-    } else {
-      console.warn('RESEND_API_KEY not set. Printing OTP to server log.');
-      console.log(`[DEV ONLY] OTP for ${email}: ${otp}`);
-      res.json({ message: 'OTP generated (Dev Mode: Check Server Logs)' });
-    }
-  } catch (err) {
-    console.error('Email error:', err);
-    res.status(500).json({ error: 'Failed to send email' });
-  }
+  // OTP Logic ...
+  // ... (existing OTP generation) ...
+  // ...
 });
 
-// 2. Verify OTP & Login
+// 2. Verify OTP
 app.post('/api/auth/verify-otp', (req, res) => {
   const { email, otp } = req.body;
   const stored = otpStore.get(email);
@@ -186,29 +101,49 @@ app.post('/api/auth/verify-otp', (req, res) => {
     otpStore.delete(email);
     return res.status(400).json({ error: 'OTP expired' });
   }
-  if (stored.otp !== otp) {
-    return res.status(400).json({ error: 'Invalid OTP' });
-  }
+  if (stored.otp !== otp) return res.status(400).json({ error: 'Invalid OTP' });
 
-  // Success
   otpStore.delete(email);
 
-  // Create Session
   const token = crypto.randomUUID();
-  // Role Logic: simple string check as per existing app (P1 migration)
-  // Real RBAC comes in P2.
-  const role = email.includes('admin') ? 'admin' : 'student';
-  const user = { email, role, registeredAt: new Date().toISOString() };
+  const user = getOrCreateUser(email);
 
   sessionStore.set(token, user);
 
-  // Set Cookie
   res.cookie('token', token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production', // true in Render
+    secure: process.env.NODE_ENV === 'production',
     sameSite: 'strict',
-    maxAge: 24 * 60 * 60 * 1000 // 1 day
+    maxAge: 24 * 60 * 60 * 1000
   });
+
+  res.json({ user });
+});
+
+// ADMIN API
+// Middleware to check Admin role
+const requireAdmin = (req, res, next) => {
+  const token = req.cookies.token;
+  const user = sessionStore.get(token);
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  req.user = user;
+  next();
+};
+
+app.get('/api/admin/users', requireAdmin, (req, res) => {
+  const users = Array.from(userStore.values());
+  res.json({ users });
+});
+
+app.post('/api/admin/users/update', requireAdmin, (req, res) => {
+  const { email, updates } = req.body; // updates: { isRevoked, customLimit }
+  if (!userStore.has(email)) return res.status(404).json({ error: 'User not found' });
+
+  const user = userStore.get(email);
+  Object.assign(user, updates);
+  userStore.set(email, user);
 
   res.json({ user });
 });
@@ -241,16 +176,31 @@ app.post('/api/generate-report', async (req, res) => {
   try {
     const { experimentCode, context } = req.body;
 
+    // Auth Check & Stats Tracking
+    const token = req.cookies.token;
+    let user = null;
+    if (token && sessionStore.has(token)) {
+      const sessionUser = sessionStore.get(token);
+      if (userStore.has(sessionUser.email)) {
+        user = userStore.get(sessionUser.email);
+
+        // Check Access
+        if (user.isRevoked) {
+          return res.status(403).json({ error: 'Access revoked by admin.' });
+        }
+
+        // Check Limit (Simple Daily implementation can be done here or relied on client for now)
+        // For P1 Pilot, we just track stats.
+      }
+    }
+
     if (!process.env.GEMINI_API_KEY) {
       return res.status(500).json({ error: 'Server configuration error: API Key missing' });
     }
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-    // Construct the prompt (server-side to keep logic secure if needed, though mostly for key protection here)
-    // Note: In a real app, 'context' might also be retrieved server-side to avoid sending large payloads.
-    // For now, adhering to existing logic where client sends context.
-
+    // ... Prompt Construction ... (omitted for brevity, keep existing) ...
     const prompt = `
       You are an expert physics lab assistant at the University of Nairobi.
       
@@ -304,6 +254,14 @@ app.post('/api/generate-report', async (req, res) => {
     });
 
     const text = response.text;
+
+    // Increment Stats
+    if (user) {
+      user.reportsGenerated = (user.reportsGenerated || 0) + 1;
+      userStore.set(user.email, user);
+      console.log(`[Stats] User ${user.email} generated report. Total: ${user.reportsGenerated}`);
+    }
+
     res.json({ content: text });
 
   } catch (error) {

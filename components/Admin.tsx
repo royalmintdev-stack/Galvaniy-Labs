@@ -12,32 +12,70 @@ export const Admin: React.FC<AdminProps> = ({ theme }) => {
   const [references, setReferences] = useState<string[]>([]);
   const [newRef, setNewRef] = useState('');
 
-  const loadData = () => {
-    setUsers(storageService.getAllUsers());
-    setReferences(storageService.getReferences());
+  // Fetch Users from Server
+  const loadData = async () => {
+    try {
+      const res = await fetch('/api/admin/users');
+      if (res.ok) {
+        const data = await res.json();
+        setUsers(data.users || []);
+      } else {
+        console.error('Failed to fetch users');
+      }
+      // Note: References still managed locally for now as simpler fix
+      setReferences(storageService.getReferences());
+    } catch (err) {
+      console.error('Admin Load Error:', err);
+    }
   };
 
   useEffect(() => {
     loadData();
   }, []);
 
-  const toggleRevoke = (email: string) => {
-    storageService.revokeUser(email);
-    loadData();
-  };
-
-  const handleUpdateLimit = (email: string, delta: number) => {
+  const toggleRevoke = async (email: string) => {
     const user = users.find(u => u.email === email);
     if (!user) return;
-    
+
+    try {
+      await fetch('/api/admin/users/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          updates: { isRevoked: !user.isRevoked }
+        })
+      });
+      loadData();
+    } catch (err) {
+      console.error('Update failed', err);
+    }
+  };
+
+  const handleUpdateLimit = async (email: string, delta: number) => {
+    const user = users.find(u => u.email === email);
+    if (!user) return;
+
     // Default is 3 if customLimit is undefined
     const currentLimit = user.customLimit !== undefined ? user.customLimit : 3;
     const newLimit = Math.max(0, currentLimit + delta);
-    
-    storageService.updateUserLimit(email, newLimit);
-    loadData();
+
+    try {
+      await fetch('/api/admin/users/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          updates: { customLimit: newLimit }
+        })
+      });
+      loadData();
+    } catch (err) {
+      console.error('Update failed', err);
+    }
   };
 
+  // Keep Ref logic same for now
   const handleAddReference = (e: React.FormEvent) => {
     e.preventDefault();
     if (newRef.trim()) {
@@ -54,7 +92,8 @@ export const Admin: React.FC<AdminProps> = ({ theme }) => {
 
   // Statistics
   const totalStudents = users.filter(u => u.role === 'student').length;
-  const totalReports = users.reduce((acc, curr) => acc + curr.reportsGenerated, 0);
+  // Sum reports from server data
+  const totalReports = users.reduce((acc, curr) => acc + (curr.reportsGenerated || 0), 0);
 
   return (
     <div className="mt-8 space-y-8">
@@ -86,8 +125,8 @@ export const Admin: React.FC<AdminProps> = ({ theme }) => {
           <h2 className="text-xl font-bold flex items-center gap-2 text-white">
             <Shield className="text-red-400" /> User Management
           </h2>
-          <button 
-            onClick={loadData} 
+          <button
+            onClick={loadData}
             className="p-2 bg-white/5 rounded-lg hover:bg-white/10 transition-colors"
             title="Refresh Data"
           >
@@ -119,24 +158,24 @@ export const Admin: React.FC<AdminProps> = ({ theme }) => {
                   <td className="px-4 py-3 text-center text-slate-300">{u.reportsGenerated}</td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-center gap-3">
-                        <button 
-                            onClick={() => handleUpdateLimit(u.email, -1)}
-                            className="w-6 h-6 rounded bg-white/5 hover:bg-white/10 flex items-center justify-center text-xs text-slate-400 hover:text-white transition-colors border border-white/10"
-                        >-</button>
-                        <span className="w-6 text-center font-mono font-bold text-yellow-400">
-                            {u.customLimit !== undefined ? u.customLimit : 3}
-                        </span>
-                        <button 
-                            onClick={() => handleUpdateLimit(u.email, 1)}
-                            className="w-6 h-6 rounded bg-white/5 hover:bg-white/10 flex items-center justify-center text-xs text-slate-400 hover:text-white transition-colors border border-white/10"
-                        >+</button>
+                      <button
+                        onClick={() => handleUpdateLimit(u.email, -1)}
+                        className="w-6 h-6 rounded bg-white/5 hover:bg-white/10 flex items-center justify-center text-xs text-slate-400 hover:text-white transition-colors border border-white/10"
+                      >-</button>
+                      <span className="w-6 text-center font-mono font-bold text-yellow-400">
+                        {u.customLimit !== undefined ? u.customLimit : 3}
+                      </span>
+                      <button
+                        onClick={() => handleUpdateLimit(u.email, 1)}
+                        className="w-6 h-6 rounded bg-white/5 hover:bg-white/10 flex items-center justify-center text-xs text-slate-400 hover:text-white transition-colors border border-white/10"
+                      >+</button>
                     </div>
                   </td>
                   <td className="px-4 py-3">
                     {u.isRevoked ? (
-                      <span className="text-red-400 text-xs flex items-center gap-1 font-medium bg-red-500/10 px-2 py-1 rounded border border-red-500/20 w-fit"><Ban size={12}/> Revoked</span>
+                      <span className="text-red-400 text-xs flex items-center gap-1 font-medium bg-red-500/10 px-2 py-1 rounded border border-red-500/20 w-fit"><Ban size={12} /> Revoked</span>
                     ) : (
-                      <span className="text-green-400 text-xs flex items-center gap-1 font-medium bg-green-500/10 px-2 py-1 rounded border border-green-500/20 w-fit"><CheckCircle size={12}/> Active</span>
+                      <span className="text-green-400 text-xs flex items-center gap-1 font-medium bg-green-500/10 px-2 py-1 rounded border border-green-500/20 w-fit"><CheckCircle size={12} /> Active</span>
                     )}
                   </td>
                   <td className="px-4 py-3">
@@ -161,42 +200,42 @@ export const Admin: React.FC<AdminProps> = ({ theme }) => {
         <h2 className="text-xl font-bold flex items-center gap-2 mb-6 text-white">
           <FileText className="text-yellow-400" /> Lab Manual References
         </h2>
-        
+
         <form onSubmit={handleAddReference} className="mb-6 flex gap-2">
-            <input 
-                type="text" 
-                value={newRef}
-                onChange={(e) => setNewRef(e.target.value)}
-                placeholder="Paste new experiment theory or lab instructions here..."
-                className="flex-1 bg-black/20 border border-white/10 rounded-xl p-3 text-sm focus:outline-none focus:border-yellow-500/50 text-slate-200 placeholder:text-slate-500"
-            />
-            <button 
-                type="submit"
-                className="bg-yellow-600/20 hover:bg-yellow-600/30 text-yellow-300 border border-yellow-600/30 px-6 rounded-xl flex items-center gap-2 font-medium transition-colors"
-            >
-                <Plus size={18} /> Add
-            </button>
+          <input
+            type="text"
+            value={newRef}
+            onChange={(e) => setNewRef(e.target.value)}
+            placeholder="Paste new experiment theory or lab instructions here..."
+            className="flex-1 bg-black/20 border border-white/10 rounded-xl p-3 text-sm focus:outline-none focus:border-yellow-500/50 text-slate-200 placeholder:text-slate-500"
+          />
+          <button
+            type="submit"
+            className="bg-yellow-600/20 hover:bg-yellow-600/30 text-yellow-300 border border-yellow-600/30 px-6 rounded-xl flex items-center gap-2 font-medium transition-colors"
+          >
+            <Plus size={18} /> Add
+          </button>
         </form>
 
         <div className="space-y-3 max-h-60 overflow-y-auto pr-2">
-            {references.map((ref, idx) => (
-                <div key={idx} className="bg-white/5 p-4 rounded-xl flex items-start justify-between group border border-white/5 hover:border-white/10 transition-colors">
-                    <p className="text-xs text-slate-300 line-clamp-2 font-mono flex-1 mr-4 opacity-80 group-hover:opacity-100">{ref}</p>
-                    <button 
-                        onClick={() => handleRemoveReference(idx)}
-                        className="text-slate-500 hover:text-red-400 opacity-50 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-500/10 rounded"
-                        title="Remove Reference"
-                    >
-                        <Trash2 size={16} />
-                    </button>
-                </div>
-            ))}
-            {references.length === 0 && (
-                <div className="text-center py-8 border-2 border-dashed border-white/5 rounded-xl">
-                    <p className="text-slate-500 text-sm">No custom references added.</p>
-                    <p className="text-slate-600 text-xs mt-1">The system is using the default 2025 Manual context.</p>
-                </div>
-            )}
+          {references.map((ref, idx) => (
+            <div key={idx} className="bg-white/5 p-4 rounded-xl flex items-start justify-between group border border-white/5 hover:border-white/10 transition-colors">
+              <p className="text-xs text-slate-300 line-clamp-2 font-mono flex-1 mr-4 opacity-80 group-hover:opacity-100">{ref}</p>
+              <button
+                onClick={() => handleRemoveReference(idx)}
+                className="text-slate-500 hover:text-red-400 opacity-50 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-500/10 rounded"
+                title="Remove Reference"
+              >
+                <Trash2 size={16} />
+              </button>
+            </div>
+          ))}
+          {references.length === 0 && (
+            <div className="text-center py-8 border-2 border-dashed border-white/5 rounded-xl">
+              <p className="text-slate-500 text-sm">No custom references added.</p>
+              <p className="text-slate-600 text-xs mt-1">The system is using the default 2025 Manual context.</p>
+            </div>
+          )}
         </div>
       </div>
     </div>
