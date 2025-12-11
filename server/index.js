@@ -29,17 +29,120 @@ const otpStore = new Map();
 const sessionStore = new Map(); // Simple session store [token, user]
 
 // Email Transporter (Resend)
-const resend = new Resend(process.env.RESEND_API_KEY);
+const resend = process.env.RESEND_API_KEY
+  ? new Resend(process.env.RESEND_API_KEY)
+  : null;
+
+// Google OAuth
+import session from 'express-session';
+import passport from 'passport';
+import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
+
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'dev_secret_key', // Use env in prod
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production',
+    httpOnly: true,
+    maxAge: 24 * 60 * 60 * 1000 // 1 day
+  }
+}));
+
+app.use(passport.initialize());
+app.use(passport.session());
+
+// Serialization (Required for Passport Session)
+passport.serializeUser((user, done) => done(null, user));
+passport.deserializeUser((user, done) => done(null, user));
+
+if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+  passport.use(new GoogleStrategy({
+    clientID: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    callbackURL: process.env.NODE_ENV === 'production'
+      ? 'https://galvaniy-labs-jvrr.onrender.com/auth/google/callback'
+      : '/auth/google/callback'
+  },
+    (accessToken, refreshToken, profile, done) => {
+      // Logic: Find or Create User
+      const email = profile.emails?.[0].value;
+
+      if (!email) return done(new Error('No email from Google'));
+
+      // Create Session ID
+      const token = crypto.randomUUID();
+      const role = email.includes('admin') || email === 'qsmceoglvn@gmail.com' ? 'admin' : 'student';
+      const user = { email, role, registeredAt: new Date().toISOString(), name: profile.displayName };
+
+      // Store in our simple map (for parity with OTP flow)
+      // Note: Passport usually manages session in `req.user`, but we use `sessionStore` for the `/me` endpoint parity.
+      // We will sync them:
+      sessionStore.set(token, user);
+
+      // Pass token to controller to set cookie manually if needed, or let Passport handle "user" object
+      // Actually, let's just return the user object with the token attached so the callback handler can set our custom cookie.
+      return done(null, { ...user, token });
+    }
+  ));
+} else {
+  console.warn('[Server] Google OAuth skipped (Missing Client ID/Secret)');
+}
+
+// Google Routes
+app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+
+app.get('/auth/google/callback',
+  passport.authenticate('google', { failureRedirect: '/' }),
+  (req, res) => {
+    // Successful authentication
+    const user = req.user;
+
+    // Set our custom token cookie (same as OTP flow)
+    res.cookie('token', user.token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 24 * 60 * 60 * 1000
+    });
+
+    res.redirect('/'); // Back to app
+  }
+);
 
 // Auth Routes
 
-// 1. Send OTP
+import { WHITELIST } from './whitelist.js';
+
+// 1. Send OTP (or Direct Login for Whitelist)
 app.post('/api/auth/send-otp', async (req, res) => {
   const { email } = req.body;
   if (!email || !email.includes('@')) {
     return res.status(400).json({ error: 'Invalid email' });
   }
 
+  // PILOT FEATURE: Direct Login for Whitelisted Users
+  if (WHITELIST.has(email)) {
+    console.log(`[Server] Whitelisted user ${email} - Direct Login`);
+
+    // Create Session immediately
+    const token = crypto.randomUUID();
+    const role = email.includes('admin') || email === 'qsmceoglvn@gmail.com' ? 'admin' : 'student';
+    const user = { email, role, registeredAt: new Date().toISOString() };
+
+    sessionStore.set(token, user);
+
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 24 * 60 * 60 * 1000 // 1 day
+    });
+
+    return res.json({ user, message: 'Direct login successful' });
+  }
+
+  // Normal flow for non-whitelisted users
   // Generate 6-digit OTP
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
   const expires = Date.now() + 5 * 60 * 1000; // 5 minutes
@@ -48,7 +151,7 @@ app.post('/api/auth/send-otp', async (req, res) => {
   console.log(`[Server] OTP generated for ${email}`);
 
   try {
-    if (process.env.RESEND_API_KEY) {
+    if (resend) {
       const { data, error } = await resend.emails.send({
         from: 'onboarding@resend.dev', // Default for free tier
         to: email, // Delivered ONLY if verified email or sent to self
