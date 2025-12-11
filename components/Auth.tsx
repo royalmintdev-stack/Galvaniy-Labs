@@ -147,8 +147,8 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, theme }) => {
           </form>
         )}
 
-        {/* Separator & Google Auth */}
-        <div className="mt-8 pt-6 border-t border-slate-700/50">
+        {/* Separator & Google Auth (Hidden for Pilot) */}
+        {/* <div className="mt-8 pt-6 border-t border-slate-700/50">
           <a
             href="/auth/google"
             className="w-full py-3 rounded-lg font-medium bg-white text-slate-900 flex items-center justify-center gap-2 hover:bg-slate-100 transition-colors shadow-lg"
@@ -161,7 +161,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, theme }) => {
             </svg>
             Sign in with Google
           </a>
-        </div>
+        </div> */}
       </motion.div>
     </div >
   );
