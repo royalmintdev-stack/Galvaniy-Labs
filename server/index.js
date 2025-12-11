@@ -15,7 +15,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 import cookieParser from 'cookie-parser';
-import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 import crypto from 'crypto';
 
 // ... imports ...
@@ -28,22 +28,8 @@ app.use(cookieParser());
 const otpStore = new Map();
 const sessionStore = new Map(); // Simple session store [token, user]
 
-// Email Transporter
-// Email Transporter
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 587,
-  secure: false, // upgrade later with STARTTLS
-  logger: true, // Log to console
-  debug: true,  // Include debug info
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS?.replace(/\s+/g, ''), // Remove spaces if present
-  },
-  tls: {
-    rejectUnauthorized: false // Helps if cert chain issues, though risky, good for debugging
-  }
-});
+// Email Transporter (Resend)
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 // Auth Routes
 
@@ -59,20 +45,25 @@ app.post('/api/auth/send-otp', async (req, res) => {
   const expires = Date.now() + 5 * 60 * 1000; // 5 minutes
 
   otpStore.set(email, { otp, expires });
-  console.log(`[Server] OTP generated for ${email}`); // Log existence, not value (in prod) 
+  console.log(`[Server] OTP generated for ${email}`);
 
   try {
-    if (process.env.EMAIL_USER) {
-      await transporter.sendMail({
-        from: process.env.EMAIL_USER,
-        to: email,
+    if (process.env.RESEND_API_KEY) {
+      const { data, error } = await resend.emails.send({
+        from: 'onboarding@resend.dev', // Default for free tier
+        to: email, // Delivered ONLY if verified email or sent to self
         subject: 'Your Physics Lab OTP',
-        text: `Your verification code is: ${otp}`,
         html: `<p>Your verification code is: <b>${otp}</b></p><p>Valid for 5 minutes.</p>`,
       });
+
+      if (error) {
+        console.error('Resend Error:', error);
+        return res.status(500).json({ error: 'Failed to send email via Resend' });
+      }
+
       res.json({ message: 'OTP sent' });
     } else {
-      console.warn('EMAIL_USER not set. Printing OTP to server log for DEV/DEMO purposes ONLY.');
+      console.warn('RESEND_API_KEY not set. Printing OTP to server log.');
       console.log(`[DEV ONLY] OTP for ${email}: ${otp}`);
       res.json({ message: 'OTP generated (Dev Mode: Check Server Logs)' });
     }

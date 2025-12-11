@@ -7,8 +7,6 @@ services:
     envVars:
       - key: GEMINI_API_KEY
         sync: false
-      - key: EMAIL_USER
-        value: galvanytech@gmail.com
-      - key: EMAIL_PASS
+      - key: RESEND_API_KEY
         sync: false
     plan: free
